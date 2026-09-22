@@ -120,9 +120,7 @@ class _SemGuardDataset(_RemoteDatasetLoader):
 
         if categories is not None:
             if not categories:
-                raise ValueError(
-                    "`categories` must be a non-empty list (pass None to use the defaults)"
-                )
+                raise ValueError("`categories` must be a non-empty list (pass None to use the defaults)")
             self._validate_enums(categories, SemGuardCategory, "category")
             self.categories = categories
         else:
