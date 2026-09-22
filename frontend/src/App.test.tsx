@@ -5,7 +5,7 @@
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import App from "./App";
 import { ThemeProvider } from "./hooks/useTheme";
 
@@ -62,6 +62,13 @@ jest.mock("./services/api", () => ({
     listTargets: jest.fn(),
     getTarget: jest.fn(),
   },
+  convertersApi: {
+    listConverters: jest.fn().mockResolvedValue({ items: [] }),
+    listConverterTypes: jest.fn().mockResolvedValue({ items: [] }),
+    createConverter: jest.fn(),
+    deleteConverter: jest.fn(),
+    previewConversion: jest.fn(),
+  },
   versionApi: {
     getVersion: jest.fn().mockResolvedValue({ version: "1.0.0" }),
   },
@@ -93,18 +100,21 @@ jest.mock("./components/Layout/MainLayout", () => {
     children,
     currentView,
     onNavigate,
+    labels,
   }: {
     children: React.ReactNode;
     currentView: string;
     onNavigate: (view: string) => void;
+    labels: Record<string, string>;
   }) => {
     return (
       <div data-testid="main-layout" data-current-view={currentView}>
+        <span data-testid="global-labels-json">{JSON.stringify(labels)}</span>
         <button onClick={() => onNavigate("home")} data-testid="nav-home">
           Home
         </button>
-        <button onClick={() => onNavigate("targets")} data-testid="nav-config">
-          Config
+        <button onClick={() => onNavigate("registry")} data-testid="nav-config">
+          Registry
         </button>
         <button onClick={() => onNavigate("chat")} data-testid="nav-chat">
           Chat
@@ -136,6 +146,7 @@ jest.mock("./components/Chat/ChatWindow", () => {
     activeConversationId,
     attackTarget,
     objective,
+    outcome,
     targetResolutionStatus,
     onRetryTargetResolution,
     onConversationCreated,
@@ -150,6 +161,7 @@ jest.mock("./components/Chat/ChatWindow", () => {
     activeConversationId: string | null;
     attackTarget?: { identifier_hash?: string | null } | null;
     objective?: string;
+    outcome?: string;
     targetResolutionStatus?: string;
     onRetryTargetResolution?: () => void;
     onConversationCreated: (attackResultId: string, conversationId: string) => void;
@@ -169,6 +181,7 @@ jest.mock("./components/Chat/ChatWindow", () => {
         </span>
         <span data-testid="attack-target-hash">{attackTarget?.identifier_hash ?? "none"}</span>
         <span data-testid="objective">{objective ?? ""}</span>
+        <span data-testid="outcome">{outcome ?? "none"}</span>
         <span data-testid="target-resolution-status">{targetResolutionStatus ?? "none"}</span>
         <span data-testid="labels-operator">{labels.operator ?? ""}</span>
         <span data-testid="labels-json">{JSON.stringify(labels)}</span>
@@ -268,7 +281,7 @@ jest.mock("./components/History/AttackHistory", () => {
             Start attack
           </button>
         ) : (
-          <button onClick={() => onNavigate("targets")} data-testid="history-configure-target">
+          <button onClick={() => onNavigate("registry")} data-testid="history-configure-target">
             Configure target
           </button>
         )}
@@ -305,19 +318,16 @@ jest.mock("./components/Home/Home", () => {
     activeTarget,
     onNavigate,
     onOpenAttack,
-    labels,
   }: {
     activeTarget: unknown;
     onNavigate: (view: string) => void;
     onOpenAttack: (attackResultId: string) => void;
-    labels: Record<string, string>;
   }) => {
     return (
       <div data-testid="home-view">
         <span data-testid="home-has-target">{activeTarget ? "yes" : "no"}</span>
-        <span data-testid="home-labels-json">{JSON.stringify(labels)}</span>
-        <button onClick={() => onNavigate("targets")} data-testid="home-go-config">
-          Go to config
+        <button onClick={() => onNavigate("registry")} data-testid="home-go-config">
+          Go to registry
         </button>
         <button
           onClick={() => onOpenAttack("ar-home-attack")}
@@ -358,7 +368,7 @@ jest.mock("./components/Scenarios/ScenarioDetail", () => {
       <div data-testid="scenario-detail">
         <span data-testid="scenario-detail-has-target">{activeTarget ? "yes" : "no"}</span>
         <span data-testid="scenario-detail-labels-json">{JSON.stringify(labels)}</span>
-        <button onClick={() => onNavigate("targets")} data-testid="scenario-detail-go-config">
+        <button onClick={() => onNavigate("registry")} data-testid="scenario-detail-go-config">
           Configure target
         </button>
       </div>
@@ -384,9 +394,34 @@ jest.mock("./components/Scenarios/ScenarioRunPage", () => {
   };
 });
 
+jest.mock("./components/History/ScenarioHistory", () => {
+  const { useLocation } = jest.requireActual<typeof import("react-router")>("react-router");
+  const MockScenarioHistory = () => {
+    const location = useLocation();
+    return <div data-testid="scenario-history" data-location={`${location.pathname}${location.search}`} />;
+  };
+  MockScenarioHistory.displayName = "MockScenarioHistory";
+  return {
+    __esModule: true,
+    default: MockScenarioHistory,
+  };
+});
+
+function RouterProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  return (
+    <>
+      <output aria-label="Current URL">{location.pathname}</output>
+      <button type="button" onClick={() => navigate(-1)}>Back</button>
+    </>
+  );
+}
+
 describe("App", () => {
   // App reads the active view from the URL, so every render needs a router.
-  // initialPath lets a test deep-link straight to a view (e.g. "/targets").
+  // initialPath lets a test deep-link straight to a view.
   function renderApp(initialPath = "/") {
     return render(
       <ThemeProvider>
@@ -425,13 +460,58 @@ describe("App", () => {
   });
 
   it("renders the view named by the initial URL", () => {
-    renderApp("/targets");
+    renderApp("/registry/targets");
 
     expect(screen.getByTestId("main-layout")).toHaveAttribute(
       "data-current-view",
-      "targets"
+      "registry"
     );
     expect(screen.getByTestId("target-config")).toBeInTheDocument();
+  });
+
+  it("redirects /registry to the target registry", async () => {
+    renderApp("/registry");
+
+    expect(await screen.findByTestId("target-config")).toBeInTheDocument();
+    expect(screen.getByTestId("main-layout")).toHaveAttribute(
+      "data-current-view",
+      "registry"
+    );
+  });
+
+  it("redirects legacy /targets to the target registry without adding a history entry", async () => {
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider>
+        <MemoryRouter initialEntries={["/chat", "/targets"]}>
+          <App />
+          <RouterProbe />
+        </MemoryRouter>
+      </ThemeProvider>
+    );
+
+    expect(await screen.findByTestId("target-config")).toBeInTheDocument();
+    expect(screen.getByLabelText("Current URL")).toHaveTextContent(/^\/registry\/targets$/);
+    expect(screen.getByTestId("main-layout")).toHaveAttribute(
+      "data-current-view",
+      "registry"
+    );
+
+    await user.click(screen.getByRole("button", { name: "Back", exact: true }));
+
+    expect(await screen.findByTestId("chat-window")).toBeInTheDocument();
+    expect(screen.getByLabelText("Current URL")).toHaveTextContent(/^\/chat$/);
+  });
+
+  it("renders the converter registry from its direct URL", async () => {
+    renderApp("/registry/converters");
+
+    expect(screen.getByTestId("main-layout")).toHaveAttribute(
+      "data-current-view",
+      "registry"
+    );
+    expect(await screen.findByRole("heading", { name: "Converter Registry" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Converters" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("renders configuration at /config", () => {
@@ -444,13 +524,15 @@ describe("App", () => {
     expect(screen.getByTestId("configuration")).toBeInTheDocument();
   });
 
-  it("renders the history view when deep-linked to /history", () => {
-    renderApp("/history");
+  it("renders the attack history tab when deep-linked to /history/attacks", () => {
+    renderApp("/history/attacks");
 
     expect(screen.getByTestId("main-layout")).toHaveAttribute(
       "data-current-view",
       "history"
     );
+    expect(screen.getByRole("heading", { level: 1, name: "History" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Attacks" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("attack-history")).toBeInTheDocument();
   });
 
@@ -474,12 +556,12 @@ describe("App", () => {
     expect(screen.getByTestId("scenario-detail")).toBeInTheDocument();
   });
 
-  it("renders the scanner run dashboard and marks the sidebar current when deep-linked to /scanner-history/:id", () => {
+  it("renders the scanner run dashboard and keeps History current when deep-linked to /scanner-history/:id", () => {
     renderApp("/scanner-history/sr-123");
 
     expect(screen.getByTestId("main-layout")).toHaveAttribute(
       "data-current-view",
-      "scenarios"
+      "history"
     );
     expect(screen.getByTestId("scenario-run-page")).toBeInTheDocument();
   });
@@ -489,7 +571,7 @@ describe("App", () => {
 
     expect(screen.getByTestId("main-layout")).toHaveAttribute(
       "data-current-view",
-      "scenarios"
+      "history"
     );
     expect(screen.getByTestId("scenario-run-page")).toHaveAttribute(
       "data-location",
@@ -506,6 +588,31 @@ describe("App", () => {
     );
   });
 
+  it("redirects the legacy scanner history page and preserves its filters", async () => {
+    renderApp("/scenario-history?operator=alice");
+
+    expect(await screen.findByTestId("main-layout")).toHaveAttribute(
+      "data-current-view",
+      "history"
+    );
+    expect(screen.getByTestId("scenario-history")).toBeInTheDocument();
+    expect(screen.getByTestId("scenario-history")).toHaveAttribute(
+      "data-location",
+      "/history/scanner?operator=alice"
+    );
+  });
+
+  it("renders scanner history in its URL-backed history tab", () => {
+    renderApp("/history/scanner?operator=alice");
+
+    expect(screen.getByTestId("main-layout")).toHaveAttribute(
+      "data-current-view",
+      "history"
+    );
+    expect(screen.getByRole("tab", { name: "Scanner" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("scenario-history")).toBeInTheDocument();
+  });
+
   it("switches to the scenarios view via the sidebar", () => {
     renderApp();
 
@@ -518,6 +625,17 @@ describe("App", () => {
     expect(screen.getByTestId("scenario-catalog")).toBeInTheDocument();
   });
 
+  it("switches between history tabs", async () => {
+    renderApp("/history/attacks");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Scanner" }));
+
+    expect(await screen.findByTestId("scenario-history")).toHaveAttribute(
+      "data-location",
+      "/history/scanner"
+    );
+  });
+
   it("passes the active target and labels to the scenario detail view", () => {
     renderApp("/scanner/foundry.red_team_agent");
 
@@ -525,14 +643,14 @@ describe("App", () => {
     expect(screen.getByTestId("scenario-detail-labels-json")).toHaveTextContent("operator");
   });
 
-  it("navigates from scenario detail to targets when it requests it", () => {
+  it("navigates from scenario detail to the registry when it requests it", () => {
     renderApp("/scanner/foundry.red_team_agent");
 
     fireEvent.click(screen.getByTestId("scenario-detail-go-config"));
 
     expect(screen.getByTestId("main-layout")).toHaveAttribute(
       "data-current-view",
-      "targets"
+      "registry"
     );
     expect(screen.getByTestId("target-config")).toBeInTheDocument();
   });
@@ -559,19 +677,19 @@ describe("App", () => {
     expect(screen.getByTestId("chat-window")).toBeInTheDocument();
   });
 
-  it("switches to targets view", () => {
+  it("switches to the target registry view", () => {
     renderApp();
 
     fireEvent.click(screen.getByTestId("nav-config"));
 
     expect(screen.getByTestId("main-layout")).toHaveAttribute(
       "data-current-view",
-      "targets"
+      "registry"
     );
     expect(screen.getByTestId("target-config")).toBeInTheDocument();
   });
 
-  it("switches back to chat from targets", () => {
+  it("switches back to chat from the registry", () => {
     renderApp();
 
     fireEvent.click(screen.getByTestId("nav-config"));
@@ -647,14 +765,14 @@ describe("App", () => {
     expect(screen.getByTestId("conversation-id")).toHaveTextContent("none");
   });
 
-  it("sets active target from targets page and passes to chat", () => {
+  it("sets an active target from the registry and passes it to chat", () => {
     renderApp();
 
     // Switch to chat and confirm no target initially
     fireEvent.click(screen.getByTestId("nav-chat"));
     expect(screen.getByTestId("has-target")).toHaveTextContent("no");
 
-    // Switch to targets and set target
+    // Switch to the registry and set a target
     fireEvent.click(screen.getByTestId("nav-config"));
     fireEvent.click(screen.getByTestId("set-target"));
 
@@ -675,13 +793,13 @@ describe("App", () => {
     expect(screen.getByTestId("attack-history")).toBeInTheDocument();
   });
 
-  it("navigates from empty history to targets when no target is active", () => {
-    renderApp("/history");
+  it("navigates from empty history to the registry when no target is active", () => {
+    renderApp("/history/attacks");
 
     expect(screen.getByTestId("history-has-target")).toHaveTextContent("no");
     fireEvent.click(screen.getByTestId("history-configure-target"));
 
-    expect(screen.getByTestId("main-layout")).toHaveAttribute("data-current-view", "targets");
+    expect(screen.getByTestId("main-layout")).toHaveAttribute("data-current-view", "registry");
     expect(screen.getByTestId("target-config")).toBeInTheDocument();
   });
 
@@ -732,14 +850,14 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByTestId("conversation-id")).toHaveTextContent("home-conv-1"));
   });
 
-  it("navigates to targets from the home view", () => {
+  it("navigates to the registry from the home view", () => {
     renderApp();
 
     fireEvent.click(screen.getByTestId("home-go-config"));
 
     expect(screen.getByTestId("main-layout")).toHaveAttribute(
       "data-current-view",
-      "targets"
+      "registry"
     );
     expect(screen.getByTestId("target-config")).toBeInTheDocument();
   });
@@ -858,10 +976,8 @@ describe("App", () => {
 
     renderApp();
 
-    // Home receives the same labels prop — assert there to avoid racing the
-    // async initLabels effect against a view-change re-render.
     await waitFor(() => {
-      const labels = screen.getByTestId("home-labels-json").textContent ?? "";
+      const labels = screen.getByTestId("global-labels-json").textContent ?? "";
       expect(labels).toContain('"operator":"test.user"');
       expect(labels).toContain('"custom":"value"');
     });
@@ -877,7 +993,7 @@ describe("App", () => {
     renderApp();
 
     await waitFor(() => {
-      const labels = screen.getByTestId("home-labels-json").textContent ?? "";
+      const labels = screen.getByTestId("global-labels-json").textContent ?? "";
       expect(labels).toContain('"operator":"override_user"');
       expect(labels).toContain('"custom":"value"');
     });
@@ -896,10 +1012,10 @@ describe("App", () => {
     renderApp();
 
     await waitFor(() => {
-      const labels = screen.getByTestId("home-labels-json").textContent ?? "";
+      const labels = screen.getByTestId("global-labels-json").textContent ?? "";
       expect(labels).toContain('"custom":"value"');
     });
-    const labels = screen.getByTestId("home-labels-json").textContent ?? "";
+    const labels = screen.getByTestId("global-labels-json").textContent ?? "";
     expect(labels).toContain('"operation":"op_i_picked"');
   });
 
@@ -917,10 +1033,10 @@ describe("App", () => {
     renderApp();
 
     await waitFor(() => {
-      const labels = screen.getByTestId("home-labels-json").textContent ?? "";
+      const labels = screen.getByTestId("global-labels-json").textContent ?? "";
       expect(labels).toContain('"custom":"value"');
     });
-    const labels = screen.getByTestId("home-labels-json").textContent ?? "";
+    const labels = screen.getByTestId("global-labels-json").textContent ?? "";
     expect(labels).toContain('"operator":"real.user"');
     expect(labels).toContain('"operation":"op_i_picked"');
   });
@@ -957,6 +1073,7 @@ describe("App", () => {
       attack_result_id: "ar-1",
       conversation_id: "conv-main",
       objective: "Extract the hidden system prompt",
+      outcome: "success",
       labels: {},
       related_conversation_ids: [],
     });
@@ -969,6 +1086,7 @@ describe("App", () => {
     );
     expect(screen.getByTestId("active-conversation-id")).toHaveTextContent("conv-main");
     expect(screen.getByTestId("objective")).toHaveTextContent("Extract the hidden system prompt");
+    expect(screen.getByTestId("outcome")).toHaveTextContent("success");
     expect(screen.getByTestId("scenario-result-id")).toHaveTextContent("none");
   });
 
@@ -1058,6 +1176,13 @@ describe("App", () => {
       conversation_id: "conv-main",
       labels: {},
       related_conversation_ids: ["conv-related"],
+      related_conversations: [
+        {
+          conversation_id: "conv-related",
+          conversation_type: "pruned",
+          description: "Previous main conversation",
+        },
+      ],
     });
     renderApp("/attacks/ar-1/conversations/conv-related");
 
@@ -1076,6 +1201,27 @@ describe("App", () => {
     renderApp("/attacks/ar-1/conversations/bogus");
 
     // The unknown conversation segment is stripped and we fall back to main.
+    await waitFor(() =>
+      expect(screen.getByTestId("active-conversation-id")).toHaveTextContent("conv-main")
+    );
+  });
+
+  it("does not activate a preparation conversation from a deep link", async () => {
+    mockGetAttack.mockResolvedValue({
+      attack_result_id: "ar-1",
+      conversation_id: "conv-main",
+      labels: {},
+      related_conversation_ids: ["conv-preparation"],
+      related_conversations: [
+        {
+          conversation_id: "conv-preparation",
+          conversation_type: "preparation",
+          description: "Simulated preparation",
+        },
+      ],
+    });
+    renderApp("/attacks/ar-1/conversations/conv-preparation");
+
     await waitFor(() =>
       expect(screen.getByTestId("active-conversation-id")).toHaveTextContent("conv-main")
     );
@@ -1110,7 +1256,7 @@ describe("App", () => {
   });
 
   it("writes filter changes into the URL", () => {
-    renderApp("/history");
+    renderApp("/history/attacks");
 
     expect(
       JSON.parse(screen.getByTestId("history-filters").textContent ?? "{}").outcome
@@ -1743,7 +1889,7 @@ describe("App", () => {
         pagination: { limit: 200, has_more: false, next_cursor: null },
       });
     const user = userEvent.setup();
-    renderApp("/history");
+    renderApp("/history/attacks");
 
     await user.click(screen.getByTestId("open-attack"));
     await waitFor(() =>

@@ -13,11 +13,11 @@ All authenticated users on a GUI instance are **fully trusted**. Any user with E
 | Prerequisite | Notes |
 | --- | --- |
 | [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) 2.84+ | Version 2.77 has a known `content-already-consumed` bug |
-| Python 3.10+ | For running the deployment script |
+| Python 3.11+ | For running the deployment script |
 | `az login` with Graph permissions | The script creates Entra app registrations, which requires Graph API access. Run `az login --scope https://graph.microsoft.com//.default` |
 | Azure permissions | **Owner** (or Contributor + User Access Administrator) on the subscription, and **Application Administrator** in Entra ID for app registrations and Graph API operations |
 | Container image pushed to ACR | Build and push before deploying (see [Building the Image](#building-the-image)) |
-| A `.env` file with runtime config | Copy and fill in `infra/env.demo.template`. Contains target endpoints and content safety config. `AZURE_SQL_DB_CONNECTION_STRING` and `AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL` are auto-injected by the script — you can omit them. Required for the default `target` initializer. Targets can also be created manually in the GUI if deploying with the `target` initializer only |
+| A `.env` file with runtime config | Copy and fill in `infra/env.demo.template`. Contains target endpoints and content safety config. `AZURE_SQL_DB_CONNECTION_STRING` and `AZURE_STORAGE_ACCOUNT_DB_DATA_CONTAINER_URL` are auto-injected by the script — you can omit them. Required for the default `target,technique` initializers. Targets can also be created manually in the GUI if deploying with the `target` initializer only |
 
 ### What the deployment creates (script + Bicep)
 
@@ -234,19 +234,19 @@ Prepare a complete local file in the same format as `infra/env.demo.template`. T
 Use one of these approved update paths:
 
 1. Update the `env-file` Container App secret in the Azure portal without retrieving or printing its current value.
-2. Redeploy `main.bicep` with a complete parameter file containing the current resource values and override only the secure parameter from disk:
+2. Redeploy `application.bicep` with a complete application parameter file containing the current resource values and override only the secure parameter from disk:
 
    ```bash
    test -f ./updated.env || { echo "ERROR: ./updated.env not found"; exit 1; }
    test -f ./current.parameters.json || { echo "ERROR: complete parameter file not found"; exit 1; }
    az deployment group create \
      --resource-group copyrit-{instance-name} \
-     --template-file infra/main.bicep \
+     --template-file infra/application.bicep \
      --parameters @./current.parameters.json \
      --parameters envFileContents=@./updated.env
    ```
 
-   `current.parameters.json` must describe the existing deployment exactly; start from `infra/parameters.example.json` and fill it from the deployed resources. Review `what-if` first. Azure CLI file expansion is silent when a path is wrong, so both existence checks are mandatory.
+   `current.parameters.json` must describe the existing application deployment exactly; start from `infra/parameters.application.example.json` and fill it from the deployed resources. Review `what-if` first. Azure CLI file expansion is silent when a path is wrong, so both existence checks are mandatory.
 
 Application-scoped secret updates do not update an existing revision. Restart the active revision after either path:
 

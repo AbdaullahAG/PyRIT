@@ -20,17 +20,17 @@ from pyrit.backend.models.scenarios import (
     ListRegisteredScenariosResponse,
     ScenarioRunListResponse,
 )
+from pyrit.backend.routes.common import parse_label_query_params
 from pyrit.backend.services.scenario_run_service import get_scenario_run_service
 from pyrit.backend.services.scenario_service import get_scenario_service
-from pyrit.models import ScenarioResult
-from pyrit.models.catalog.scenario import (
+from pyrit.models import ScenarioQueueSnapshot, ScenarioResult, ScenarioRunProgress, ScenarioRunState
+from pyrit.models.catalog import (
     RegisteredScenario,
     RunScenarioRequest,
     ScenarioRunSizeEstimate,
     ScenarioRunSizeEstimateRequest,
     ScenarioRunSummary,
 )
-from pyrit.models.scenario_progress import ScenarioRunProgress
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
 
@@ -172,20 +172,59 @@ async def start_scenario_run(request: RunScenarioRequest) -> ScenarioRunSummary:
     "/runs",
     response_model=ScenarioRunListResponse,
 )
-async def list_scenario_runs(
-    limit: int = Query(100, ge=1, le=100),
-) -> ScenarioRunListResponse:  # pyrit-async-suffix-exempt
+async def list_scenario_runs(  # pyrit-async-suffix-exempt
+    *,
+    scenario_names: list[str] | None = Query(
+        None,
+        description="Registered or persisted scenario names; repeated values are OR-matched.",
+    ),
+    run_statuses: list[ScenarioRunState] | None = Query(
+        None,
+        description="Run states; repeated values are OR-matched.",
+    ),
+    label: list[str] | None = Query(
+        None,
+        description="key:value labels; OR within a key and AND across keys.",
+    ),
+    limit: int = Query(100, ge=1, le=100, description="Maximum items per page"),
+    cursor: str | None = Query(None, description="Opaque descending history cursor"),
+) -> ScenarioRunListResponse:
     """
     List tracked scenario runs (most recent first).
 
     Args:
-        limit (int): Maximum number of runs to return. Defaults to 100.
+        scenario_names: Registered or persisted scenario names to match.
+        run_statuses: Run states to match.
+        label: Repeated key:value label filters.
+        limit: Maximum number of runs to return.
+        cursor: Opaque cursor from the previous page.
 
     Returns:
         ScenarioRunListResponse: Runs, most recent first.
     """
     service = get_scenario_run_service()
-    return await run_in_threadpool(service.list_runs, limit=limit)
+    return await run_in_threadpool(
+        service.list_runs,
+        scenario_names=scenario_names,
+        statuses=run_statuses,
+        labels=parse_label_query_params(label),
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+@router.get(
+    "/runs/queue",
+    response_model=ScenarioQueueSnapshot,
+)
+async def get_scenario_run_queue() -> ScenarioQueueSnapshot:  # pyrit-async-suffix-exempt
+    """
+    Get the active scenario and ordered FIFO waiting queue.
+
+    Returns:
+        ScenarioQueueSnapshot: Current in-process scheduler state.
+    """
+    return get_scenario_run_service().get_queue_snapshot()
 
 
 @router.get(
@@ -211,6 +250,8 @@ async def get_scenario_run(scenario_result_id: str) -> ScenarioRunSummary:  # py
         service.get_run_from_storage,
         scenario_result_id=scenario_result_id,
         active_error=active_snapshot.error,
+        queue_position=active_snapshot.queue_position,
+        active_scenario_result_id=active_snapshot.active_scenario_result_id,
     )
     if run is None:
         raise HTTPException(
@@ -249,6 +290,8 @@ async def get_scenario_run_progress(  # pyrit-async-suffix-exempt
             since=since,
             limit=limit,
             active_group_ids=active_snapshot.active_group_ids,
+            queue_position=active_snapshot.queue_position,
+            active_scenario_result_id=active_snapshot.active_scenario_result_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
