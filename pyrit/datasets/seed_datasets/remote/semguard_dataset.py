@@ -74,7 +74,7 @@ class _SemGuardDataset(_RemoteDatasetLoader):
     """
 
     HARM_CATEGORY_ALIAS_OVERRIDES: dict[str, list[HarmCategory]] = {
-        "injection_jailbreak": [HarmCategory.COORDINATION_HARM],
+        "injection_jailbreak": [HarmCategory.DECEPTION],
         "phishing": [HarmCategory.SCAMS, HarmCategory.DECEPTION],
         "privacy_leakage": [HarmCategory.PPI],
         "violent_incitement": [HarmCategory.VIOLENT_THREATS],
@@ -90,6 +90,7 @@ class _SemGuardDataset(_RemoteDatasetLoader):
     _GROUPS = ["World Islamic Sciences and Education University"]
 
     # Metadata
+    harm_categories: list[str] = [c.value for c in SemGuardCategory]
     modalities: tuple[Modality, ...] = (Modality.TEXT,)
     size: str = "large"  # 807 validated examples across 7 categories
     tags: frozenset[str] = frozenset({"safety", "multilingual", "arabic", "jailbreak"})
@@ -168,8 +169,8 @@ class _SemGuardDataset(_RemoteDatasetLoader):
         seed_prompts: list[SeedUnion] = []
 
         for item in data:
-            text = item.get("text", "").strip()
-            category = item.get("category", "")
+            text = (item.get("text") or "").strip()
+            category = (item.get("category") or "").strip()
             label = item.get("label")
 
             if not text:
